@@ -1,0 +1,9 @@
+# Project-specific ignores (add your own below)
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.env
+node_modules/
+.vite/
+.claude/context-metrics.json

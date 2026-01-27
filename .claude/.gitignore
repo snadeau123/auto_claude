@@ -1,0 +1,24 @@
+# Auto Claude framework ignores
+
+# Work artifacts
+/work/archive/
+/work/logs/
+/work/.doc-index.json
+
+# Playwright
+skills/playwright-test/node_modules/
+skills/playwright-test/.temp-execution-*
+
+# Sandbox configs
+/tmp/auto-claude-sandbox-*.json
+
+# User dotfiles (srt sandbox leaks these)
+.bash_profile
+.bashrc
+.zshrc
+.zprofile
+.profile
+.gitconfig
+.gitmodules
+.ripgreprc
+.mcp.json
