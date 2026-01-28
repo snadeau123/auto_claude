@@ -9,6 +9,9 @@
 skills/playwright-test/node_modules/
 skills/playwright-test/.temp-execution-*
 
+# Sandbox-local Claude home (auth + config copy)
+sandbox-home/
+
 # Sandbox configs
 /tmp/auto-claude-sandbox-*.json
 

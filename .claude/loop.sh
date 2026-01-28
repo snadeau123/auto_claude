@@ -91,9 +91,16 @@ if [ -f "$PLAYWRIGHT_SKILL_DIR/package.json" ]; then
   fi
 fi
 
-# Sandbox config allowing Claude's own directories
-# Note: srt doesn't support individual file paths in allowWrite, only directories
-# so we allow $HOME for .claude.json writes (Claude's own config/auth state)
+# Use dedicated auto_claude config dir — keeps auth separate from ~/.claude.json
+AUTO_CLAUDE_HOME="$HOME/.auto_claude"
+mkdir -p "$AUTO_CLAUDE_HOME"
+if [ ! -f "$AUTO_CLAUDE_HOME/.claude.json" ]; then
+  echo "No auth found. Running first-time setup..."
+  CLAUDE_CONFIG_DIR="$AUTO_CLAUDE_HOME" claude setup-token
+fi
+export CLAUDE_CONFIG_DIR="$AUTO_CLAUDE_HOME"
+
+# Sandbox config
 SANDBOX_CONFIG_FILE=""
 if [ "$USE_SANDBOX" = true ] && command -v srt &> /dev/null; then
   SANDBOX_CONFIG_FILE=$(mktemp /tmp/auto-claude-sandbox-XXXXXX.json)
@@ -110,9 +117,9 @@ if [ "$USE_SANDBOX" = true ] && command -v srt &> /dev/null; then
     "allowAllUnixSockets": true
   },
   "filesystem": {
-    "denyRead": ["$HOME/.ssh", "$HOME/.gnupg", "$HOME/.aws"],
-    "allowWrite": [".", "$HOME", "/tmp"],
-    "denyWrite": [".env", "*.key", "*.pem"],
+    "denyRead": ["$HOME/.ssh", "$HOME/.gnupg", "$HOME/.git-credentials", "$HOME/.aws", "$HOME/.config/gcloud", "$HOME/.kube", "$HOME/.docker"],
+    "allowWrite": [".", "$AUTO_CLAUDE_HOME", "/tmp"],
+    "denyWrite": [".env", "*.key", "*.pem", "*.secret", "credentials.json", "secrets.yaml"],
     "allowRead": ["$HOME/.cache/ms-playwright"]
   }
 }
