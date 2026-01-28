@@ -46,7 +46,9 @@ It picks up where it left off — incomplete tasks resume automatically.
 | `--max-iterations N` | 50 | Maximum loop iterations (recommended: set this to stay safe) |
 | `--model MODEL` | — | Claude model to use (e.g. `opus`, `sonnet`) |
 | `--sandbox` | on | Run inside srt sandbox (filesystem/network isolation) |
+| `--request "text"` | — | Feature request, bug report, or guidance for the first iteration |
 | `--no-sandbox` | — | Disable sandboxing |
+| `-h, --help` | — | Show help and usage examples |
 
 **Tip:** Always set `--max-iterations` to a reasonable number to avoid runaway sessions.
 
@@ -109,8 +111,12 @@ These are invoked automatically during the loop, or manually via `claude /skill-
 │   ├── playwright-test/ # Playwright testing
 │   ├── security-scan/   # Security scanner
 │   └── doc-refresh/     # Documentation updater
-└── hooks/
-    └── context-usage.sh # PostToolUse context telemetry
+├── hooks/
+│   ├── context-usage.sh # PostToolUse context telemetry
+│   ├── copy-session-log.sh # Copies session logs after each iteration
+│   └── live-stats.sh     # Real-time stats collection (tool calls, files, context %)
+└── scripts/
+    └── watch-stats.sh    # Background watcher for live stats during iterations
 ```
 
 ## Sandbox
@@ -121,6 +127,10 @@ By default, iterations run inside [srt](https://github.com/AkimaLunar/srt) with:
 - **Filesystem**: Blocks reads to `~/.ssh`, `~/.gnupg`, `~/.aws`; blocks writes to `.env`, `*.key`, `*.pem`
 
 Disable with `--no-sandbox` if srt is not installed or not needed.
+
+## Authentication
+
+The loop uses a dedicated config directory at `~/.auto_claude` to keep auth tokens separate from your main `~/.claude.json`. On first run, it will prompt you to set up a token via `claude setup-token`. This avoids conflicts with your regular Claude Code sessions.
 
 ## Acknowledgments
 
