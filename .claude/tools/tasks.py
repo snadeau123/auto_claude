@@ -227,6 +227,10 @@ def cmd_update(args):
         item["acceptanceCriteria"].append(args.add_criteria)
         updated.append(f"added criterion")
 
+    if args.deps:
+        item["dependencies"] = [d.strip() for d in args.deps.split(",")]
+        updated.append(f"dependencies: {item['dependencies']}")
+
     save_items(data)
     print(f"Updated {args.id}: {', '.join(updated)}")
 
@@ -346,6 +350,7 @@ def main():
     update_p.add_argument("--notes", help="Set notes")
     update_p.add_argument("--title", help="Set title")
     update_p.add_argument("--add-criteria", help="Add acceptance criterion")
+    update_p.add_argument("--deps", help="Set comma-separated dependency IDs")
 
     # stats
     subparsers.add_parser("stats", help="Show statistics")

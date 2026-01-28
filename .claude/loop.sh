@@ -1,6 +1,6 @@
 #!/bin/bash
 # Auto Claude - Long-running autonomous coding session loop
-# Usage: .claude/loop.sh [--max-iterations N] [--init "project description"] [--model MODEL] [--no-sandbox]
+# Usage: .claude/loop.sh [--max-iterations N] [--init "project description"] [--request "change or bug"] [--model MODEL] [--no-sandbox]
 #
 # Spawns fresh Claude instances per iteration, checking for completion signal.
 
@@ -17,11 +17,35 @@ LOGS_DIR="$PROJECT_ROOT/work/logs"
 MAX_ITERATIONS=50
 USE_SANDBOX=true
 INIT_PROMPT=""
+REQUEST=""
 MODEL=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
   case $1 in
+    -h|--help)
+      cat <<'HELP'
+Auto Claude - Autonomous coding session loop
+
+Usage: .claude/loop.sh [OPTIONS]
+
+Options:
+  --init "description"       Initialize a new project (generates spec, architecture, work items)
+  --request "text"           Feature request, bug report, or guidance for the first iteration
+  --max-iterations N         Max loop iterations (default: 50)
+  --model MODEL              Claude model to use
+  --no-sandbox               Disable srt sandbox
+  --sandbox                  Enable srt sandbox (default)
+  -h, --help                 Show this help
+
+Examples:
+  .claude/loop.sh --init "A 2D platformer game with level editor"
+  .claude/loop.sh --max-iterations 5
+  .claude/loop.sh --request "The player clips through walls when moving fast"
+  .claude/loop.sh --request "Add a settings menu with volume and keybind options"
+HELP
+      exit 0
+      ;;
     --max-iterations)
       MAX_ITERATIONS="$2"
       shift 2
@@ -44,6 +68,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --init=*)
       INIT_PROMPT="${1#*=}"
+      shift
+      ;;
+    --request)
+      REQUEST="$2"
+      shift 2
+      ;;
+    --request=*)
+      REQUEST="${1#*=}"
       shift
       ;;
     --model)
@@ -194,6 +226,7 @@ echo "=============================================="
 echo "Max iterations: $MAX_ITERATIONS"
 echo "Sandbox: $USE_SANDBOX"
 [ -n "$MODEL" ] && echo "Model: $MODEL"
+[ -n "$REQUEST" ] && echo "Request: $REQUEST"
 echo ""
 
 for i in $(seq 1 $MAX_ITERATIONS); do
@@ -204,12 +237,51 @@ for i in $(seq 1 $MAX_ITERATIONS); do
 
   LOG_FILE="$LOGS_DIR/iteration-$i-$(date '+%Y%m%d-%H%M%S').log"
 
+  # Build optional request block (only first iteration)
+  REQUEST_BLOCK=""
+  if [ -n "$REQUEST" ]; then
+    REQUEST_BLOCK="
+USER REQUEST:
+$REQUEST
+
+Before starting the normal workflow, you MUST process this request:
+
+1. READ CONTEXT: Read docs/spec.md, docs/architecture.md, and docs/current-state.md to understand the current system.
+
+2. CLASSIFY the request as one of:
+   a) BUG — something is broken or behaving incorrectly
+   b) FEATURE — new functionality or a change to existing behavior
+   c) GUIDANCE — instruction on approach (e.g. 'use WebGL2 instead of WebGL1')
+
+3. ACT based on classification:
+
+   FOR BUGS:
+   - Investigate the root cause by reading relevant source files
+   - Create ONE work item: python3 .claude/tools/tasks.py create 'Fix: <description>' '<root cause and fix approach>' --priority 1
+   - Then proceed to STEP 1 (the new item will be picked up as next task)
+
+   FOR FEATURES:
+   - Update docs/spec.md with the new or changed requirements
+   - Update docs/architecture.md if the design is affected
+   - Break the feature into small work items (each completable in one session)
+   - Add each item: python3 .claude/tools/tasks.py create '<title>' '<description>' --priority <N>
+   - Set dependencies if needed: python3 .claude/tools/tasks.py update WI-XXX --deps WI-YYY
+   - Then proceed to STEP 1 (tasks.py next will pick the first actionable item)
+
+   FOR GUIDANCE:
+   - Append the guidance to work/progress.txt under Codebase Patterns so all future sessions see it
+   - Then proceed to STEP 1 (normal task flow, applying the guidance)
+
+After processing, continue with the normal WORKFLOW below.
+"
+  fi
+
   # Comprehensive workflow prompt
   PROMPT="You are an autonomous coding agent. Follow EVERY step below. Do NOT skip any step.
 
 PROJECT GOAL:
 $PROJECT_GOAL
-
+$REQUEST_BLOCK
 WORKFLOW - Execute each step and produce visible output before moving to the next:
 
 STEP 1: GET NEXT TASK
@@ -289,11 +361,44 @@ START NOW - Run step 1."
 
   echo "Log: $LOG_FILE"
 
+  # Reset live stats for this iteration
+  LIVE_STATS_FILE="$LOGS_DIR/live-stats.json"
+  rm -f "$LIVE_STATS_FILE"
+
+  # Start background watcher for real-time stats
+  bash "$SCRIPT_DIR/scripts/watch-stats.sh" "$LIVE_STATS_FILE" 3 &
+  WATCHER_PID=$!
+
+  echo "Starting claude..."
   if [ "$USE_SANDBOX" = true ] && [ -n "$SANDBOX_CONFIG_FILE" ]; then
     OUTPUT=$(srt -s "$SANDBOX_CONFIG_FILE" -c "claude $MODEL_FLAG --chrome --dangerously-skip-permissions -p \"$PROMPT\"" 2>&1 | tee "$LOG_FILE") || true
   else
     OUTPUT=$(claude $MODEL_FLAG --chrome --dangerously-skip-permissions -p "$PROMPT" 2>&1 | tee "$LOG_FILE") || true
   fi
+
+  # Kill watcher
+  kill "$WATCHER_PID" 2>/dev/null; wait "$WATCHER_PID" 2>/dev/null
+  echo ""
+  echo "Claude exited. Log: $(wc -l < "$LOG_FILE") lines."
+
+  # Print final stats summary for this iteration
+  if [ -f "$LIVE_STATS_FILE" ]; then
+    python3 -c "
+import json
+with open('$LIVE_STATS_FILE') as f:
+    s = json.load(f)
+ctx = s.get('context_pct', 0)
+calls = s.get('tool_calls', 0)
+modified = s.get('files_modified', [])
+read_files = s.get('files_read', [])
+print(f'  Summary: {ctx:.0f}% context | {calls} tool calls | {len(modified)} files modified | {len(read_files)} files read')
+if modified:
+    print(f'  Modified: {chr(10).join(\"    \" + f for f in modified)}')
+" 2>/dev/null || true
+  fi
+
+  # Clear request after first iteration (only injected once)
+  REQUEST=""
 
   # Reconcile: auto-complete tasks with git commits, reset stale in_progress
   python3 .claude/tools/tasks.py reconcile 2>/dev/null || true

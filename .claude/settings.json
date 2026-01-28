@@ -32,6 +32,20 @@
           {
             "type": "command",
             "command": "bash .claude/hooks/context-usage.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/live-stats.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/copy-session-log.sh"
           }
         ]
       }
