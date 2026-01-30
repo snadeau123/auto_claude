@@ -187,7 +187,24 @@ $INIT_PROMPT
 Your task:
 1. Create docs/spec.md with requirements, constraints, acceptance criteria
 2. Create docs/architecture.md with system design
-3. Create work/items.json with small work items (each completable in one session)
+3. Create work items using the tasks.py init command
+
+To create work items, write a JSON array to /tmp/items.json, then run:
+  python3 .claude/tools/tasks.py init \"project-name\" -f /tmp/items.json
+
+Example /tmp/items.json:
+[
+  {
+    \"id\": \"WI-001\",
+    \"title\": \"Short title\",
+    \"description\": \"What to implement\",
+    \"acceptanceCriteria\": [\"Criterion 1\", \"Criterion 2\"],
+    \"priority\": 1,
+    \"dependencies\": []
+  }
+]
+
+The init command will normalize the items and create work/items.json with the correct format.
 
 Guidelines for work items:
 - RIGHT size: 'Add database model', 'Create UI component', 'Add API endpoint'

@@ -27,11 +27,15 @@ ITEMS_FILE = PROJECT_ROOT / "work" / "items.json"
 
 
 def load_items():
-    """Load items from JSON file."""
+    """Load items from JSON file. Handles both array and object formats."""
     if not ITEMS_FILE.exists():
         return {"project": "auto_claude", "branchName": "main", "workItems": []}
     with open(ITEMS_FILE) as f:
-        return json.load(f)
+        data = json.load(f)
+    # Normalize: if it's a plain array, wrap it
+    if isinstance(data, list):
+        return {"project": "unknown", "branchName": "main", "workItems": data}
+    return data
 
 
 def save_items(data):
@@ -193,6 +197,53 @@ def cmd_create(args):
     print(f"Created {new_id}: {args.title}")
 
 
+def cmd_init(args):
+    """Initialize work items from JSON array (stdin or file)."""
+    import sys
+
+    # Read JSON from stdin or file
+    if args.file:
+        with open(args.file) as f:
+            raw = json.load(f)
+    else:
+        raw = json.load(sys.stdin)
+
+    # Handle both array and object input
+    if isinstance(raw, dict) and "workItems" in raw:
+        items = raw["workItems"]
+    elif isinstance(raw, list):
+        items = raw
+    else:
+        print("Error: Expected JSON array or object with 'workItems' key")
+        sys.exit(1)
+
+    # Normalize each item
+    normalized = []
+    for i, item in enumerate(items):
+        normalized.append({
+            "id": item.get("id", f"WI-{i+1:03d}"),
+            "title": item.get("title", "Untitled"),
+            "description": item.get("description", ""),
+            "acceptanceCriteria": item.get("acceptanceCriteria", []),
+            "priority": item.get("priority", i + 1),
+            "status": item.get("status", "pending"),
+            "dependencies": item.get("dependencies", []),
+            "notes": item.get("notes", "")
+        })
+
+    # Wrap in proper structure
+    data = {
+        "project": args.project,
+        "branchName": args.branch or "main",
+        "workItems": normalized
+    }
+
+    save_items(data)
+    print(f"Initialized {len(normalized)} work items for project '{args.project}'")
+    for item in normalized:
+        print(f"  {item['id']}: {item['title']}")
+
+
 def cmd_update(args):
     """Update a work item."""
     data = load_items()
@@ -343,6 +394,12 @@ def main():
     create_p.add_argument("--priority", type=int, help="Priority (lower = higher)")
     create_p.add_argument("--deps", help="Comma-separated dependency IDs")
 
+    # init
+    init_p = subparsers.add_parser("init", help="Initialize items from JSON array")
+    init_p.add_argument("project", help="Project name")
+    init_p.add_argument("--branch", help="Branch name (default: main)")
+    init_p.add_argument("--file", "-f", help="Read from file instead of stdin")
+
     # update
     update_p = subparsers.add_parser("update", help="Update item")
     update_p.add_argument("id", help="Item ID")
@@ -365,6 +422,7 @@ def main():
         "get": cmd_get,
         "next": cmd_next,
         "create": cmd_create,
+        "init": cmd_init,
         "update": cmd_update,
         "stats": cmd_stats,
         "reconcile": cmd_reconcile,

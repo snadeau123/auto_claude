@@ -11,6 +11,8 @@ You have access to custom tools and skills described below. Use them when workin
 |---------|---------|
 | `python3 .claude/tools/tasks.py next` | Get next task |
 | `python3 .claude/tools/tasks.py list` | List all tasks |
+| `python3 .claude/tools/tasks.py create '<title>' '<desc>'` | Create a single task |
+| `python3 .claude/tools/tasks.py init <project> -f <file>` | Initialize tasks from JSON array |
 | `python3 .claude/tools/tasks.py update <id> --status <s>` | Update task status |
 | `python3 .claude/tools/tasks.py stats` | Show completion statistics |
 | `python3 .claude/tools/tasks.py reconcile` | Sync task status with git commits |
