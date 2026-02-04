@@ -192,7 +192,9 @@ After completing a task, check the context usage from the hook telemetry (shown 
 
 **If context < 60%**: Go back to STEP 1 and start the next task. You have budget remaining — use it.
 
-**If context >= 60%**: Stop. You are done for this session.
+**If context >= 60% to 80%**: try to finish the current task if almost done, otherwise stop, you are done for this session.
+
+**If context >= 80%** Stop. You are done for this session.
 
 **If all tasks are done**: Output `<promise>COMPLETE</promise>` and stop.
 

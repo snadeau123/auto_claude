@@ -65,23 +65,28 @@ if file_path:
         stats['files_read'] = read_files
 
 # Extract token usage from transcript (last assistant message)
+# Only read last 50KB to avoid loading huge files
 if transcript_path and os.path.exists(transcript_path):
     try:
         last_usage = None
-        with open(transcript_path) as f:
-            for line in reversed(f.readlines()):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                    if (obj.get('type') == 'assistant'
-                        and 'message' in obj
-                        and 'usage' in obj['message']):
-                        last_usage = obj['message']['usage']
-                        break
-                except (json.JSONDecodeError, KeyError):
-                    continue
+        file_size = os.path.getsize(transcript_path)
+        with open(transcript_path, 'rb') as f:
+            # Seek to last 50KB (enough to find recent messages)
+            f.seek(max(0, file_size - 50000))
+            chunk = f.read().decode('utf-8', errors='ignore')
+        for line in reversed(chunk.split('\\n')):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+                if (obj.get('type') == 'assistant'
+                    and 'message' in obj
+                    and 'usage' in obj['message']):
+                    last_usage = obj['message']['usage']
+                    break
+            except (json.JSONDecodeError, KeyError):
+                continue
         if last_usage:
             tokens = (last_usage.get('input_tokens', 0)
                     + last_usage.get('cache_creation_input_tokens', 0)

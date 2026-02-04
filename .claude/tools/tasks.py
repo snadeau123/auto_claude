@@ -199,6 +199,7 @@ def cmd_create(args):
 
 def cmd_init(args):
     """Initialize work items from JSON array (stdin or file)."""
+    import subprocess
     import sys
 
     # Read JSON from stdin or file
@@ -217,6 +218,17 @@ def cmd_init(args):
         print("Error: Expected JSON array or object with 'workItems' key")
         sys.exit(1)
 
+    # Get current HEAD commit to scope future reconcile operations
+    # This prevents old commits from marking new tasks as complete
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, cwd=str(PROJECT_ROOT)
+        )
+        since_commit = result.stdout.strip() if result.returncode == 0 else None
+    except Exception:
+        since_commit = None
+
     # Normalize each item
     normalized = []
     for i, item in enumerate(items):
@@ -231,10 +243,12 @@ def cmd_init(args):
             "notes": item.get("notes", "")
         })
 
-    # Wrap in proper structure
+    # Wrap in proper structure with initialization metadata
     data = {
         "project": args.project,
         "branchName": args.branch or "main",
+        "createdAt": datetime.now().isoformat(),
+        "sinceCommit": since_commit,  # Only reconcile commits after this
         "workItems": normalized
     }
 
@@ -292,17 +306,30 @@ def cmd_reconcile(args):
     Scans git log for commits matching 'feat(WI-XXX):' or 'docs(WI-XXX):'
     and marks those tasks as completed if they aren't already.
     Also resets any in_progress tasks back to pending (stale from crashed iterations).
+
+    Only scans commits made AFTER the project was initialized (sinceCommit)
+    to prevent old commits from marking new tasks as complete.
     """
     import subprocess
 
     data = load_items()
     items = data.get("workItems", [])
+    since_commit = data.get("sinceCommit")
     changed = []
 
-    # Get all commit messages
+    # Build git log command - scope to commits after initialization if available
+    git_cmd = ["git", "log", "--oneline"]
+    if since_commit:
+        # Only look at commits after the initialization commit
+        git_cmd.append(f"{since_commit}..HEAD")
+    else:
+        # Fallback: scan all (legacy behavior for old items.json files)
+        git_cmd.append("--all")
+
+    # Get commit messages
     try:
         result = subprocess.run(
-            ["git", "log", "--oneline", "--all"],
+            git_cmd,
             capture_output=True, text=True, cwd=str(PROJECT_ROOT)
         )
         commit_log = result.stdout

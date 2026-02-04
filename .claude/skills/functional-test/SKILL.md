@@ -1,14 +1,14 @@
 ---
 name: functional-test
-description: "Test the running application using Playwright headless browser or Chrome MCP. Takes screenshots, clicks elements, reads console errors, verifies UI renders correctly. Invoke this after implementing a feature."
+description: "Test the running application using Playwright headless browser. Takes screenshots, clicks elements, reads console errors, verifies UI renders correctly. Invoke this after implementing a feature."
 user-invocable: true
 disable-model-invocation: false
-allowed-tools: Bash, Read, Write, mcp__claude-in-chrome__tabs_context_mcp, mcp__claude-in-chrome__tabs_create_mcp, mcp__claude-in-chrome__navigate, mcp__claude-in-chrome__computer, mcp__claude-in-chrome__find, mcp__claude-in-chrome__read_page, mcp__claude-in-chrome__form_input, mcp__claude-in-chrome__get_page_text, mcp__claude-in-chrome__read_console_messages, mcp__claude-in-chrome__javascript_tool
+allowed-tools: Bash, Read, Write
 ---
 
 # Functional Test
 
-Test the application using **Playwright headless browser** (primary) or **Chrome MCP** (when available outside sandbox).
+Test the application using **Playwright headless browser**.
 
 ---
 
@@ -35,11 +35,7 @@ If the port is taken, increment (8501, 8502, ...) up to 8550.
 
 ---
 
-## Step 2: Choose Test Method
-
-Try **Playwright first** (works inside sandbox). Fall back to **Chrome MCP** only if Playwright is unavailable AND Chrome MCP tools are accessible.
-
-### Option A: Playwright (preferred)
+## Step 2: Run Playwright Test
 
 Write a test script to `/tmp/playwright-test-<name>.js` and run it through the runner:
 
@@ -105,18 +101,9 @@ const helpers = require('.claude/skills/playwright-test/lib/helpers');
 // OR if running via run.js, helpers is auto-available
 ```
 
-### Option B: Chrome MCP (fallback — outside sandbox only)
+### Fallback: CLI-only (last resort)
 
-If Playwright is not installed and Chrome MCP tools are available:
-1. `mcp__claude-in-chrome__tabs_context_mcp` with `createIfEmpty=true`
-2. `mcp__claude-in-chrome__tabs_create_mcp` for a fresh tab
-3. `mcp__claude-in-chrome__navigate` to the localhost URL
-4. `mcp__claude-in-chrome__computer` with `action="screenshot"`
-5. `mcp__claude-in-chrome__read_console_messages` with `onlyErrors=true`
-
-### Option C: CLI-only (last resort)
-
-If neither Playwright nor Chrome MCP is available:
+If Playwright is unavailable:
 ```bash
 curl -s http://localhost:8500 | head -50
 curl -s -o /dev/null -w "%{http_code}" http://localhost:8500
@@ -150,10 +137,9 @@ curl -s http://localhost:8500/api/endpoint | head -20
 
 **You MUST NOT stop when a test tool fails.** Instead:
 
-1. If Playwright crashes: check server is running, retry once, then fall back to Chrome MCP or CLI.
-2. If Chrome MCP fails: fall back to CLI checks.
-3. After 3 retries on the same step, move on and report the failure.
-4. **Never let a test error halt the entire workflow.** Always report results and continue.
+1. If Playwright crashes: check server is running, retry once, then fall back to CLI.
+2. After 3 retries on the same step, move on and report the failure.
+3. **Never let a test error halt the entire workflow.** Always report results and continue.
 
 ---
 
@@ -163,7 +149,7 @@ curl -s http://localhost:8500/api/endpoint | head -20
 ## Functional Test Results
 
 **URL**: http://localhost:XXXX
-**Method**: Playwright / Chrome MCP / CLI
+**Method**: Playwright / CLI
 **Screenshots**: N taken (paths listed)
 
 ### Checks

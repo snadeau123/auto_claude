@@ -28,26 +28,29 @@ if os.path.exists(metrics_file):
     except Exception:
         pass
 
-# Source 2: calculate from transcript
+# Source 2: calculate from transcript (only read last 50KB)
 if transcript_path and os.path.exists(transcript_path):
     try:
-        with open(transcript_path) as f:
-            for line in reversed(f.readlines()):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                    if (obj.get('type') == 'assistant'
-                        and 'message' in obj
-                        and 'usage' in obj['message']):
-                        u = obj['message']['usage']
-                        if all(k in u for k in ['input_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens', 'output_tokens']):
-                            tokens = u['input_tokens'] + u['cache_creation_input_tokens'] + u['cache_read_input_tokens'] + u['output_tokens']
-                            transcript_used = (tokens / 200000) * 100
-                            break
-                except json.JSONDecodeError:
-                    continue
+        file_size = os.path.getsize(transcript_path)
+        with open(transcript_path, 'rb') as f:
+            f.seek(max(0, file_size - 50000))
+            chunk = f.read().decode('utf-8', errors='ignore')
+        for line in reversed(chunk.split('\\n')):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+                if (obj.get('type') == 'assistant'
+                    and 'message' in obj
+                    and 'usage' in obj['message']):
+                    u = obj['message']['usage']
+                    if all(k in u for k in ['input_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens', 'output_tokens']):
+                        tokens = u['input_tokens'] + u['cache_creation_input_tokens'] + u['cache_read_input_tokens'] + u['output_tokens']
+                        transcript_used = (tokens / 200000) * 100
+                        break
+            except json.JSONDecodeError:
+                continue
     except Exception:
         pass
 

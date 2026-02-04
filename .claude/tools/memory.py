@@ -37,8 +37,23 @@ DOCS_DIR = PROJECT_ROOT / "docs"
 WORK_DIR = PROJECT_ROOT / "work"
 INDEX_FILE = WORK_DIR / ".doc-index.json"
 
-# Extensions to index
-INDEXABLE = ['.md', '.txt', '.rst', '.py', '.js', '.ts', '.json']
+# Extensions to index (exclude .json - too large, not useful for docs)
+INDEXABLE = ['.md', '.txt', '.rst', '.py', '.js', '.ts', '.tsx']
+
+# Max file size to index (500KB - code files shouldn't be huge)
+MAX_FILE_SIZE = 500_000
+
+# Directories to skip
+SKIP_DIRS = [
+    'node_modules', '.git', '__pycache__', 'archive',
+    'conda_env', 'venv', '.venv', 'env', '.env',
+    'dist', 'build', '.next', '.nuxt', '.output',
+    'coverage', '.nyc_output', '.pytest_cache', '.mypy_cache',
+    'vendor', 'target', 'out', '.gradle', '.maven',
+    'eggs', '*.egg-info', 'site-packages', 'lib', 'libs',
+    '.tox', '.nox', 'htmlcov', '.coverage',
+    'generated', 'assets/generated', 'public/assets',
+]
 
 # Stopwords for TF-IDF
 STOPWORDS = {
@@ -117,11 +132,20 @@ def extract_sections(content: str, filepath: str) -> list[dict]:
 def get_indexable_files(search_path: Optional[Path] = None) -> list[Path]:
     """Find all indexable files in the search path."""
     if search_path is None:
-        search_dirs = [DOCS_DIR, WORK_DIR, PROJECT_ROOT]
+        # Index docs, work, and specific source directories
+        search_dirs = [
+            DOCS_DIR,
+            WORK_DIR,
+            PROJECT_ROOT / '.claude' / 'tools',
+            PROJECT_ROOT / 'apps' / 'backend' / 'src',
+            PROJECT_ROOT / 'apps' / 'client' / 'src',
+        ]
     else:
         search_dirs = [search_path]
 
     files = []
+    seen = set()  # Avoid duplicates
+
     for search_dir in search_dirs:
         if not search_dir.exists():
             continue
@@ -129,12 +153,21 @@ def get_indexable_files(search_path: Optional[Path] = None) -> list[Path]:
             for path in search_dir.rglob(f'*{ext}'):
                 # Skip common excludes
                 path_str = str(path)
-                if any(x in path_str for x in ['node_modules', '.git', '__pycache__', 'archive']):
+                if any(x in path_str for x in SKIP_DIRS + ['.doc-index']):
                     continue
-                # For project root, only include root-level files
-                if search_dir == PROJECT_ROOT and path.parent != PROJECT_ROOT:
-                    if DOCS_DIR not in path.parents and WORK_DIR not in path.parents:
+                # Skip files that are too large
+                try:
+                    if path.stat().st_size > MAX_FILE_SIZE:
                         continue
+                except OSError:
+                    continue
+                # Skip test files for now (can be noisy)
+                if '/tests/' in path_str or '/test_' in path_str or '.test.' in path_str or '.spec.' in path_str:
+                    continue
+                # Avoid duplicates
+                if path_str in seen:
+                    continue
+                seen.add(path_str)
                 files.append(path)
 
     return files
@@ -225,12 +258,16 @@ def load_index() -> dict | None:
 def save_index(index: dict):
     """Save index to disk."""
     WORK_DIR.mkdir(parents=True, exist_ok=True)
-    # Don't save full content to keep index small
+    # Store token counts (dict) instead of full token lists to save space
+    # A section with 7000 tokens becomes ~500 unique term counts
     compact = {k: v for k, v in index.items() if k != 'sections'}
-    compact['sections'] = [
-        {k: v for k, v in s.items() if k != 'content'}
-        for s in index['sections']
-    ]
+    compact['sections'] = []
+    for s in index['sections']:
+        section = {k: v for k, v in s.items() if k not in ('content', 'tokens')}
+        # Convert token list to counts dict for compact storage
+        if 'tokens' in s:
+            section['token_counts'] = dict(Counter(s['tokens']))
+        compact['sections'].append(section)
     INDEX_FILE.write_text(json.dumps(compact, indent=2))
 
 
@@ -248,8 +285,13 @@ def search_index(index: dict, query: str, top_n: int = 10, files: list[str] = No
         if files and section['file'] not in files:
             continue
 
-        tf = Counter(section['tokens'])
-        total = len(section['tokens']) if section['tokens'] else 1
+        # Support both old format (tokens list) and new format (token_counts dict)
+        if 'token_counts' in section:
+            tf = section['token_counts']
+            total = sum(tf.values()) if tf else 1
+        else:
+            tf = Counter(section.get('tokens', []))
+            total = len(section.get('tokens', [])) or 1
 
         score = 0
         matched_terms = []
@@ -312,11 +354,9 @@ def cmd_find(args):
         print("No index found. Run: python3 memory.py index")
         sys.exit(1)
 
-    # Re-load full index with content
-    full_index = build_index(Path(index['root']) if index.get('root') else None)
-
+    # Use saved index directly - don't rebuild!
     files = args.files.split(',') if args.files else None
-    results = search_index(full_index, args.query, args.top or 5, files)
+    results = search_index(index, args.query, args.top or 5, files)
 
     if not results:
         print(f"No matches for: {args.query}")
@@ -466,9 +506,9 @@ def cmd_batch(args):
         print("No index found. Run: python3 memory.py index")
         sys.exit(1)
 
-    full_index = build_index(Path(index['root']) if index.get('root') else None)
+    # Use saved index directly - don't rebuild!
     files = [f.strip() for f in args.files.split(',')]
-    results = search_index(full_index, args.query, args.top or 10, files)
+    results = search_index(index, args.query, args.top or 10, files)
 
     print(f"## Batch Search: '{args.query}' in {len(files)} files\n")
 

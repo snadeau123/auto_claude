@@ -99,6 +99,34 @@ done
 mkdir -p "$LOGS_DIR"
 mkdir -p "$PROJECT_ROOT/work"
 
+# Backup function for existing project data
+# Only backs up work tracking files - docs (architecture, features, current-state) persist
+backup_existing_project() {
+  local BACKUP_BASE="$PROJECT_ROOT/work/backups"
+  local TIMESTAMP=$(date '+%Y%m%d-%H%M%S')
+  local BACKUP_DIR="$BACKUP_BASE/$TIMESTAMP"
+
+  echo "Backing up existing work items to $BACKUP_DIR..."
+  mkdir -p "$BACKUP_DIR"
+
+  # Backup work files only (task tracking, progress, logs)
+  [ -f "$ITEMS_FILE" ] && cp "$ITEMS_FILE" "$BACKUP_DIR/"
+  [ -f "$PROGRESS_FILE" ] && cp "$PROGRESS_FILE" "$BACKUP_DIR/"
+  [ -f "$GOAL_FILE" ] && cp "$GOAL_FILE" "$BACKUP_DIR/"
+  [ -d "$LOGS_DIR" ] && cp -r "$LOGS_DIR" "$BACKUP_DIR/"
+
+  # Clear work tracking files only
+  rm -f "$ITEMS_FILE"
+  rm -f "$PROGRESS_FILE"
+  rm -f "$GOAL_FILE"
+  rm -rf "$LOGS_DIR"/*
+
+  # Note: docs/architecture.md, docs/current-state.md, docs/features/ are NOT cleared
+  # These describe the project itself and accumulate over time
+
+  echo "Backup complete. Previous work items saved to: $BACKUP_DIR"
+}
+
 # Initialize progress file if needed
 if [ ! -f "$PROGRESS_FILE" ]; then
   cat > "$PROGRESS_FILE" << 'EOF'
@@ -140,6 +168,7 @@ if [ "$USE_SANDBOX" = true ] && command -v srt &> /dev/null; then
 {
   "network": {
     "allowedDomains": [
+      "localhost", "127.0.0.1", "192.168.1.118",
       "github.com", "*.github.com", "*.githubusercontent.com",
       "api.anthropic.com", "*.anthropic.com",
       "pypi.org", "*.pypi.org", "files.pythonhosted.org",
@@ -150,7 +179,7 @@ if [ "$USE_SANDBOX" = true ] && command -v srt &> /dev/null; then
   },
   "filesystem": {
     "denyRead": ["$HOME/.ssh", "$HOME/.gnupg", "$HOME/.git-credentials", "$HOME/.aws", "$HOME/.config/gcloud", "$HOME/.kube", "$HOME/.docker"],
-    "allowWrite": [".", "$AUTO_CLAUDE_HOME", "/tmp"],
+    "allowWrite": [".", "$AUTO_CLAUDE_HOME", "/tmp", "$HOME/.local/state/claude", "$HOME/.config"],
     "denyWrite": [".env", "*.key", "*.pem", "*.secret", "credentials.json", "secrets.yaml"],
     "allowRead": ["$HOME/.cache/ms-playwright"]
   }
@@ -167,6 +196,16 @@ fi
 
 # Check if we need to initialize the project
 ITEM_COUNT=$(jq '.workItems | length' "$ITEMS_FILE" 2>/dev/null || echo "0")
+
+# If --init was provided and there's an existing project, backup first
+if [ -n "$INIT_PROMPT" ] && [ "$ITEM_COUNT" != "0" ]; then
+  echo "=============================================="
+  echo "  Existing Project Detected"
+  echo "=============================================="
+  echo "Found $ITEM_COUNT existing work items."
+  backup_existing_project
+  ITEM_COUNT="0"  # Reset so init proceeds
+fi
 
 if [ "$ITEM_COUNT" = "0" ]; then
   if [ -n "$INIT_PROMPT" ]; then
@@ -217,9 +256,9 @@ Do NOT ask questions. Make reasonable assumptions. Output a summary when done."
     echo "Log: $LOG_FILE"
 
     if [ "$USE_SANDBOX" = true ] && [ -n "$SANDBOX_CONFIG_FILE" ]; then
-      srt -s "$SANDBOX_CONFIG_FILE" -c "claude $MODEL_FLAG --chrome --dangerously-skip-permissions -p \"$PRD_PROMPT\"" 2>&1 | tee "$LOG_FILE"
+      srt -s "$SANDBOX_CONFIG_FILE" -c "claude $MODEL_FLAG --dangerously-skip-permissions -p \"$PRD_PROMPT\"" 2>&1 | tee "$LOG_FILE"
     else
-      claude $MODEL_FLAG --chrome --dangerously-skip-permissions -p "$PRD_PROMPT" 2>&1 | tee "$LOG_FILE"
+      claude $MODEL_FLAG --dangerously-skip-permissions -p "$PRD_PROMPT" 2>&1 | tee "$LOG_FILE"
     fi
 
     echo ""
@@ -246,6 +285,10 @@ echo "Sandbox: $USE_SANDBOX"
 [ -n "$REQUEST" ] && echo "Request: $REQUEST"
 echo ""
 
+# API error tracking
+CONSECUTIVE_API_FAILURES=0
+MAX_API_RETRIES=2
+
 for i in $(seq 1 $MAX_ITERATIONS); do
   echo ""
   echo "==============================================================="
@@ -257,9 +300,11 @@ for i in $(seq 1 $MAX_ITERATIONS); do
   # Build optional request block (only first iteration)
   REQUEST_BLOCK=""
   if [ -n "$REQUEST" ]; then
+    # Escape double quotes in REQUEST to prevent shell string breakage
+    REQUEST_ESCAPED="${REQUEST//\"/\\\"}"
     REQUEST_BLOCK="
 USER REQUEST:
-$REQUEST
+$REQUEST_ESCAPED
 
 Before starting the normal workflow, you MUST process this request:
 
@@ -312,8 +357,9 @@ STEP 3: LOAD CONTEXT (read ALL three files, do NOT skip any)
 3a. Read docs/spec.md - understand requirements and constraints
 3b. Read docs/architecture.md - understand system structure and components
 3c. Read docs/current-state.md - understand what is built and how to run it
-3d. REQUIRED - Run the memory tool to search for task-relevant context:
+3d. OPTIONAL - If docs have changed, rebuild the memory index (skip if already indexed):
     python3 .claude/tools/memory.py index
+    Then search for task-relevant context:
     python3 .claude/tools/memory.py find 'keywords from task title'
 3e. REQUIRED - Search for RELATED features, not just the task itself.
     Before implementing, think: what existing systems will this task touch or integrate with?
@@ -328,7 +374,7 @@ Follow the patterns and conventions discovered in step 3e. Keep changes minimal 
 
 STEP 5: TEST - INVOKE THE /functional-test SKILL
 You MUST use the Skill tool to invoke: skill='functional-test'
-This runs Chrome MCP browser automation to verify the UI works.
+This runs Playwright headless browser automation to verify the UI works.
 For non-UI tasks, also run: npm test / pytest as appropriate.
 
 STEP 6: SECURITY SCAN - INVOKE THE /security-scan SKILL
@@ -351,7 +397,8 @@ Output a summary with: Task ID, what changed, test result, security result, docs
 STEP 10: CONTEXT-AWARE CONTINUATION
 Check the context usage from the hook telemetry shown in system reminders (e.g. [Context telemetry:XX% | estimation from transcript:XX%]). Use whichever value is higher.
 - If context < 60%: Go back to STEP 1 and start the next task immediately. You have budget remaining.
-- If context >= 60%: Stop. You are done for this session.
+- If context >= 60% to 80%: try to finish the current task if almost done, otherwise stop, you are done for this session.
+- If context >= 80%: Stop. You are done for this session.
 - If all tasks done: Output <promise>COMPLETE</promise> and stop.
 
 CONTEXT EXHAUSTION HANDOFF:
@@ -386,11 +433,77 @@ START NOW - Run step 1."
   bash "$SCRIPT_DIR/scripts/watch-stats.sh" "$LIVE_STATS_FILE" 3 &
   WATCHER_PID=$!
 
-  echo "Starting claude..."
+  # Stall timeout (default 5 minutes, override with STALL_TIMEOUT env var)
+  STALL_TIMEOUT="${STALL_TIMEOUT:-300}"
+
+  echo "Starting claude (stall timeout: ${STALL_TIMEOUT}s)..."
+  # Run claude in a completely isolated subshell to prevent signals from killing parent
   if [ "$USE_SANDBOX" = true ] && [ -n "$SANDBOX_CONFIG_FILE" ]; then
-    OUTPUT=$(srt -s "$SANDBOX_CONFIG_FILE" -c "claude $MODEL_FLAG --chrome --dangerously-skip-permissions -p \"$PROMPT\"" 2>&1 | tee "$LOG_FILE") || true
+    (
+      trap '' SIGTERM SIGINT SIGHUP SIGQUIT
+      srt -s "$SANDBOX_CONFIG_FILE" -c "claude $MODEL_FLAG --dangerously-skip-permissions -p \"$PROMPT\"" 2>&1 || echo "[CLAUDE_CRASHED]"
+    ) | tee "$LOG_FILE" &
+    CLAUDE_PID=$!
   else
-    OUTPUT=$(claude $MODEL_FLAG --chrome --dangerously-skip-permissions -p "$PROMPT" 2>&1 | tee "$LOG_FILE") || true
+    (
+      trap '' SIGTERM SIGINT SIGHUP SIGQUIT
+      claude $MODEL_FLAG --dangerously-skip-permissions -p "$PROMPT" 2>&1 || echo "[CLAUDE_CRASHED]"
+    ) | tee "$LOG_FILE" &
+    CLAUDE_PID=$!
+  fi
+
+  # Start watchdog to kill process if stalled (monitors live-stats.json for activity)
+  bash "$SCRIPT_DIR/scripts/watchdog.sh" "$CLAUDE_PID" "$LIVE_STATS_FILE" "$STALL_TIMEOUT" &
+  WATCHDOG_PID=$!
+
+  # Wait for claude to finish
+  wait $CLAUDE_PID 2>/dev/null
+  CLAUDE_EXIT=$?
+
+  # Kill watchdog
+  kill $WATCHDOG_PID 2>/dev/null; wait $WATCHDOG_PID 2>/dev/null
+  OUTPUT=$(cat "$LOG_FILE" 2>/dev/null || echo "[LOG_READ_FAILED]")
+
+  # Check for API errors, crashes, or watchdog kills in output
+  API_ERROR_DETECTED=false
+  if echo "$OUTPUT" | grep -qE "No messages returned|AxiosError|ERR_BAD_RESPONSE|status=502|ECONNRESET|ETIMEDOUT|\[CLAUDE_CRASHED\]|\[LOG_READ_FAILED\]|\[WATCHDOG\]"; then
+    API_ERROR_DETECTED=true
+  fi
+
+  # Check if watchdog killed the process (exit code 137 = killed by signal 9)
+  if [ $CLAUDE_EXIT -eq 137 ]; then
+    echo "Warning: Process was killed (likely by watchdog due to stall)"
+    API_ERROR_DETECTED=true
+  fi
+
+  # Also detect if log is suspiciously short (likely a crash)
+  LOG_LINES=$(wc -l < "$LOG_FILE" 2>/dev/null || echo "0")
+  if [ "$LOG_LINES" -lt 5 ] && [ $CLAUDE_EXIT -ne 0 ]; then
+    API_ERROR_DETECTED=true
+    echo "Warning: Log file has only $LOG_LINES lines - likely crashed early"
+  fi
+
+  # Log any non-zero exit but continue the loop
+  if [ $CLAUDE_EXIT -ne 0 ]; then
+    echo "Warning: Claude exited with code $CLAUDE_EXIT"
+    if [ "$API_ERROR_DETECTED" = true ]; then
+      CONSECUTIVE_API_FAILURES=$((CONSECUTIVE_API_FAILURES + 1))
+      echo "API error detected (failure $CONSECUTIVE_API_FAILURES of $MAX_API_RETRIES allowed)"
+      if [ $CONSECUTIVE_API_FAILURES -gt $MAX_API_RETRIES ]; then
+        echo ""
+        echo "=============================================="
+        echo "  STOPPING: Too many consecutive API failures"
+        echo "=============================================="
+        echo "The Anthropic API appears to be having issues."
+        echo "Please wait a few minutes and try again."
+        exit 1
+      fi
+      echo "Waiting 30 seconds before retry..."
+      sleep 30
+    fi
+  else
+    # Reset counter on successful iteration
+    CONSECUTIVE_API_FAILURES=0
   fi
 
   # Kill watcher
