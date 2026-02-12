@@ -18,6 +18,45 @@ MAX_ITERATIONS=50
 USE_SANDBOX=true
 INIT_PROMPT=""
 REQUEST=""
+
+# Shell-quote helper for safe command construction
+shq() { printf '%q' "$1"; }
+
+# Run claude with PTY (required for Bash tool execution) in an injection-safe way
+# Usage: run_claude_pty "prompt" "log_file"
+run_claude_pty() {
+  local prompt="$1"
+  local log_file="$2"
+
+  # Write prompt to temp file to avoid shell injection from nested quoting
+  # Use LOGS_DIR (inside project) so it's accessible inside the sandbox
+  local prompt_file
+  prompt_file="$(mktemp "$LOGS_DIR/prompt-XXXXXX.txt")"
+  printf '%s' "$prompt" > "$prompt_file"
+
+  local model_arg=""
+  if [ -n "$MODEL" ]; then
+    model_arg="--model $(shq "$MODEL")"
+  fi
+
+  # Build inner command that reads prompt from file
+  local inner_cmd
+  inner_cmd="claude $model_arg --dangerously-skip-permissions -p \"\$(cat $(shq "$prompt_file"))\""
+
+  local exit_code
+  if [ "$USE_SANDBOX" = true ] && [ -n "$SANDBOX_CONFIG_FILE" ]; then
+    local outer_cmd
+    outer_cmd="srt -s $(shq "$SANDBOX_CONFIG_FILE") -c $(shq "$inner_cmd")"
+    script -q -e -c "$outer_cmd" /dev/null 2>&1 | tee "$log_file"
+    exit_code=${PIPESTATUS[0]}
+  else
+    script -q -e -c "$inner_cmd" /dev/null 2>&1 | tee "$log_file"
+    exit_code=${PIPESTATUS[0]}
+  fi
+
+  rm -f "$prompt_file"
+  return $exit_code
+}
 MODEL=""
 
 # Parse arguments
@@ -255,11 +294,7 @@ Do NOT ask questions. Make reasonable assumptions. Output a summary when done."
     LOG_FILE="$LOGS_DIR/init-$(date '+%Y%m%d-%H%M%S').log"
     echo "Log: $LOG_FILE"
 
-    if [ "$USE_SANDBOX" = true ] && [ -n "$SANDBOX_CONFIG_FILE" ]; then
-      srt -s "$SANDBOX_CONFIG_FILE" -c "claude $MODEL_FLAG --dangerously-skip-permissions -p \"$PRD_PROMPT\"" 2>&1 | tee "$LOG_FILE"
-    else
-      claude $MODEL_FLAG --dangerously-skip-permissions -p "$PRD_PROMPT" 2>&1 | tee "$LOG_FILE"
-    fi
+    run_claude_pty "$PRD_PROMPT" "$LOG_FILE"
 
     echo ""
     echo "Initialization complete. Starting loop..."
@@ -438,19 +473,12 @@ START NOW - Run step 1."
 
   echo "Starting claude (stall timeout: ${STALL_TIMEOUT}s)..."
   # Run claude in a completely isolated subshell to prevent signals from killing parent
-  if [ "$USE_SANDBOX" = true ] && [ -n "$SANDBOX_CONFIG_FILE" ]; then
-    (
-      trap '' SIGTERM SIGINT SIGHUP SIGQUIT
-      srt -s "$SANDBOX_CONFIG_FILE" -c "claude $MODEL_FLAG --dangerously-skip-permissions -p \"$PROMPT\"" 2>&1 || echo "[CLAUDE_CRASHED]"
-    ) | tee "$LOG_FILE" &
-    CLAUDE_PID=$!
-  else
-    (
-      trap '' SIGTERM SIGINT SIGHUP SIGQUIT
-      claude $MODEL_FLAG --dangerously-skip-permissions -p "$PROMPT" 2>&1 || echo "[CLAUDE_CRASHED]"
-    ) | tee "$LOG_FILE" &
-    CLAUDE_PID=$!
-  fi
+  # Uses run_claude_pty for PTY support (required for Bash tool execution)
+  (
+    trap '' SIGTERM SIGINT SIGHUP SIGQUIT
+    run_claude_pty "$PROMPT" "$LOG_FILE" || echo "[CLAUDE_CRASHED]"
+  ) &
+  CLAUDE_PID=$!
 
   # Start watchdog to kill process if stalled (monitors live-stats.json for activity)
   bash "$SCRIPT_DIR/scripts/watchdog.sh" "$CLAUDE_PID" "$LIVE_STATS_FILE" "$STALL_TIMEOUT" &
